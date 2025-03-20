@@ -16,7 +16,7 @@ wait_for_apt
 apt-get update
 
 # Install prerequisites
-apt-get install -y gnupg software-properties-common
+apt-get install -y gnupg software-properties-common curl apt-transport-https ca-certificates
 
 # Install HashiCorp GPG key
 wait_for_apt
@@ -33,4 +33,12 @@ apt-get update
 wait_for_apt
 apt-get install -y terraform
 
-# Add Azure CLI installation here if needed
+# Install Azure CLI
+wait_for_apt
+curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# Verify installations
+echo "Terraform version:"
+terraform --version
+echo "Azure CLI version:"
+az --version
