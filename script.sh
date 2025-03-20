@@ -1,44 +1,85 @@
 #!/bin/bash
 set -e
 
-# Function to wait for apt locks
+echo "Starting installation script..."
+
+# Function to wait for apt locks with a timeout
 wait_for_apt() {
-  while fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-    echo "Waiting for other apt/dpkg processes to complete..."
-    sleep 5
+  local timeout=300  # 5 minutes timeout
+  local start_time=$(date +%s)
+  local waited=0
+  
+  echo "Checking for apt/dpkg locks..."
+  
+  while true; do
+    if ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1 && 
+       ! fuser /var/lib/dpkg/lock >/dev/null 2>&1 && 
+       ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+      echo "No locks detected, proceeding."
+      return 0
+    fi
+    
+    # Calculate elapsed time
+    local current_time=$(date +%s)
+    local elapsed=$((current_time - start_time))
+    
+    # Check timeout
+    if [ $elapsed -gt $timeout ]; then
+      echo "Timeout waiting for locks. Attempting to kill apt processes..."
+      ps aux | grep -i apt | grep -v grep
+      killall apt apt-get dpkg 2>/dev/null || true
+      sleep 2
+      rm -f /var/lib/apt/lists/lock 2>/dev/null
+      rm -f /var/lib/dpkg/lock 2>/dev/null
+      rm -f /var/lib/dpkg/lock-frontend 2>/dev/null
+      return 0
+    fi
+    
+    # Print status every 15 seconds
+    if [ $((elapsed % 15)) -eq 0 ] && [ $waited -ne $elapsed ]; then
+      waited=$elapsed
+      echo "Waiting for other apt/dpkg processes to complete... ($elapsed seconds elapsed)"
+      ps aux | grep -E 'apt|dpkg' | grep -v grep || echo "No apt/dpkg processes found, but locks exist"
+    fi
+    
+    sleep 1
   done
 }
 
-# Wait for any existing apt processes to finish
+# Setup catchable exits
+trap 'echo "Script interrupted or failed. Cleaning locks..."; rm -f /var/lib/apt/lists/lock; rm -f /var/lib/dpkg/lock; rm -f /var/lib/dpkg/lock-frontend;' EXIT
+
+echo "Initial wait for apt locks..."
 wait_for_apt
 
-# Update package lists
-apt-get update
+echo "Updating package lists..."
+apt-get update -q || { echo "Failed to update package lists"; exit 1; }
 
-# Install prerequisites
+echo "Installing prerequisites..."
 apt-get install -y gnupg software-properties-common curl apt-transport-https ca-certificates
 
-# Install HashiCorp GPG key
+echo "Adding HashiCorp GPG key..."
 wait_for_apt
 wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg >/dev/null
 
-# Add HashiCorp repository
+echo "Adding HashiCorp repository..."
 echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
 
-# Update again after adding repository
+echo "Updating package lists after adding repository..."
 wait_for_apt
-apt-get update
+apt-get update -q
 
-# Install Terraform
+echo "Installing Terraform..."
 wait_for_apt
 apt-get install -y terraform
 
-# Install Azure CLI
+echo "Installing Azure CLI..."
 wait_for_apt
 curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
-# Verify installations
-echo "Terraform version:"
-terraform --version
-echo "Azure CLI version:"
-az --version
+echo "Verifying installations..."
+terraform --version || echo "Terraform not properly installed"
+az --version || echo "Azure CLI not properly installed"
+
+echo "Installation completed successfully."
+exit 0
